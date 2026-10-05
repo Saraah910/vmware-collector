@@ -51,6 +51,18 @@ data "vcd_vcenter" "vcenter_details" {
   name     = each.value
 }
 
+data "external" "vm_snapshots" {
+  program = ["python", "${path.module}/get_snapshots.py"]
+  query = {
+    vcd_url       = var.vcd_url
+    vcd_api_token = try(var.vcd_api_token, "")
+    vcd_org       = try(var.vcd_org, "")
+    vcd_user      = try(var.vcd_user, "")
+    vcd_password  = try(var.vcd_password, "")
+    vm_ids        = jsonencode({ for name, vm in data.vcd_vm.vm_details : name => vm.id })
+  }
+}
+
 locals {
     # Resolve the backing vCenter server IP / hostname using vCD
     vcenter_ip = try(
@@ -116,14 +128,7 @@ locals {
         }]
         independant_disks = try(flatten([for name, disks_list in local.attached_vms_by_name : disks_list if name == vm.name]), [])
         secure_boot_status = try(vm.boot_options[0].efi_secure_boot ? "Enabled" : "Disabled", "Disabled")
-        snapshots = try(
-            [
-              for e in vm.extra_config : {
-                name = e.value
-              } if can(regex("^snapshot[0-9]+\\.title$", e.key))
-            ],
-            []
-        )
+        snapshots = try(jsondecode(data.external.vm_snapshots.result[vm_name]), [])
         cd_dvd_device = try(
             coalesce(
               vm.boot_image != "" ? vm.boot_image : null,

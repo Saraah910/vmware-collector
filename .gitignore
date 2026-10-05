@@ -4,3 +4,5 @@ output/
 terraform.tfstate
 .terraform.lock.hcl
 terraform.tfstate.backup
+__pycache__/
+*.pyc
