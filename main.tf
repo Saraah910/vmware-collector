@@ -31,7 +31,42 @@ data "vcd_vm" "vm_names_by_id_attached_to_independent_disks" {
   vdc = var.vcd_vdc
 }
 
+data "vcd_org_vdc" "target_vdc" {
+  org  = var.vcd_org
+  name = var.vcd_vdc
+}
+
+data "vcd_provider_vdc" "backing_pvdc" {
+  name = data.vcd_org_vdc.target_vdc.provider_vdc_name
+}
+
+data "vcd_resource_list" "list_of_vcenters" {
+  name          = "list_of_vcenters"
+  resource_type = "vcd_vcenter"
+  list_mode     = "name"
+}
+
+data "vcd_vcenter" "vcenter_details" {
+  for_each = toset(data.vcd_resource_list.list_of_vcenters.list)
+  name     = each.value
+}
+
 locals {
+    # Resolve the backing vCenter server IP / hostname using vCD
+    vcenter_ip = try(
+        coalesce(
+            # 1. Match the vCenter ID linked to the Provider VDC
+            one([
+                for vc in data.vcd_vcenter.vcenter_details : vc.vcenter_host
+                if vc.id == data.vcd_provider_vdc.backing_pvdc.vcenter_id
+            ]),
+            # 2. Or fallback to the first registered vCenter if single vCenter
+            try(values(data.vcd_vcenter.vcenter_details)[0].vcenter_host, null),
+            ""
+        ),
+        ""
+    )
+
     attached_vm_ids = toset(flatten([
         for disk in data.vcd_independent_disk.independent_disks_details :
             disk.attached_vm_ids
@@ -79,7 +114,25 @@ locals {
             size_in_gb = (vdisk.size_in_mb/1024),
             thin_provisioned = vdisk.thin_provisioned
         }]
-        independant_disks = try([for vm_name, disks_list in local.attached_vms_by_name : disks_list if vm_name == vm.name],null)
+        independant_disks = try(flatten([for name, disks_list in local.attached_vms_by_name : disks_list if name == vm.name]), [])
+        secure_boot_status = try(vm.boot_options[0].efi_secure_boot ? "Enabled" : "Disabled", "Disabled")
+        snapshots = try(
+            [
+              for e in vm.extra_config : {
+                name = e.value
+              } if can(regex("^snapshot[0-9]+\\.title$", e.key))
+            ],
+            []
+        )
+        cd_dvd_device = try(
+            coalesce(
+              vm.boot_image != "" ? vm.boot_image : null,
+              one([for e in vm.extra_config : e.value if can(regex("^(ide|sata)[0-9]:[0-9]\\.fileName$", e.key)) && endswith(e.value, ".iso")]),
+              "Host Device"
+            ),
+            "Host Device"
+        )
+        vcentre_ip = local.vcenter_ip
         # hardware_bindings = {
         #     sizing_policy_id    = vm.sizing_policy_id
         #     placement_policy_id = vm.placement_policy_id

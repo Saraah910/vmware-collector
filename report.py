@@ -60,6 +60,7 @@ def generate_vm_excel(json_file, output_excel="VM_Report.xlsx"):
     # Build column list dynamically
     headers = [
         "vm_name",
+        "vcentre_ip",
         "configured_os",
         "guest_os",
         "cpus",
@@ -68,6 +69,9 @@ def generate_vm_excel(json_file, output_excel="VM_Report.xlsx"):
         # "cpu_hot_add_enabled",
         # "memory_hot_add_enabled",
         "vmware_tools",
+        "secure_boot_status",
+        "snapshots",
+        "cd_dvd_device",
         "networks",
         "virtual_disks",
         "independant_disks"
