@@ -63,6 +63,18 @@ data "external" "vm_snapshots" {
   }
 }
 
+data "external" "vm_cd_dvd" {
+  program = ["python", "${path.module}/get_cd_dvd.py"]
+  query = {
+    vcd_url       = var.vcd_url
+    vcd_api_token = try(var.vcd_api_token, "")
+    vcd_org       = try(var.vcd_org, "")
+    vcd_user      = try(var.vcd_user, "")
+    vcd_password  = try(var.vcd_password, "")
+    vm_ids        = jsonencode({ for name, vm in data.vcd_vm.vm_details : name => vm.id })
+  }
+}
+
 locals {
     # Resolve the backing vCenter server IP / hostname using vCD
     vcenter_ip = try(
@@ -130,12 +142,14 @@ locals {
         secure_boot_status = try(vm.boot_options[0].efi_secure_boot ? "Enabled" : "Disabled", "Disabled")
         snapshots = try(jsondecode(data.external.vm_snapshots.result[vm_name]), [])
         cd_dvd_device = try(
-            coalesce(
-              vm.boot_image != "" ? vm.boot_image : null,
-              one([for e in vm.extra_config : e.value if can(regex("^(ide|sata)[0-9]:[0-9]\\.fileName$", e.key)) && endswith(e.value, ".iso")]),
-              "Host Device"
-            ),
-            "Host Device"
+            jsondecode(data.external.vm_cd_dvd.result[vm_name]),
+            [
+              {
+                name        = "CD/DVD drive 1"
+                device_type = "Host Device"
+                connected   = false
+              }
+            ]
         )
         vcentre_ip = local.vcenter_ip
         # hardware_bindings = {
