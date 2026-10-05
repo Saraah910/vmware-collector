@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# test.sh - Standalone test runner for get_snapshots.py
+# test.sh - Standalone test runner for get_snapshots.py and get_cd_dvd.py
 #
 # Usage:
 #   bash test.sh
@@ -21,7 +21,7 @@ else
 fi
 
 echo "============================================================"
-echo "  VMware Cloud Director Snapshot Diagnostic Test"
+echo "  VMware Cloud Director Hardware & Snapshot Diagnostic Test"
 echo "============================================================"
 
 # Auto-parse terraform.auto.tfvars if present and env vars are not set
@@ -95,14 +95,15 @@ import urllib.parse
 import ssl
 import base64
 import os
+import subprocess
 
-# Import get_snapshots functions
+# Import functions
 from get_snapshots import (
     build_ssl_context,
     get_auth_token,
-    parse_snapshots_from_body,
-    query_vm_snapshots
+    parse_snapshots_from_body
 )
+from get_cd_dvd import parse_cd_dvd_from_body
 
 vcd_url = "$VCD_URL".rstrip("/")
 api_token = "$VCD_API_TOKEN"
@@ -118,7 +119,7 @@ if not vcd_url:
 
 ctx = build_ssl_context()
 
-print("[STEP 1] Testing Authentication to VMware Cloud Director...")
+print("[STEP 1] Authenticating to VMware Cloud Director...")
 token = get_auth_token(vcd_url, api_token, org, user, password, ctx, verbose=True)
 
 if not token:
@@ -126,8 +127,8 @@ if not token:
     print("Please verify your vcd_url, vcd_api_token, or credentials.")
     sys.exit(1)
 
-print("\n[SUCCESS] Authentication token obtained.")
-print(f"Token (preview): {token[:15]}...{token[-10:] if len(token) > 25 else ''}\n")
+print(f"\n[SUCCESS] Authentication token obtained.")
+print(f"Token preview: {token[:15]}...{token[-8:] if len(token) > 23 else ''}\n")
 
 headers = {
     "Accept": "application/*+json;version=37.0, application/*+xml;version=37.0, application/json, */*",
@@ -140,9 +141,9 @@ base_vcd_url = vcd_url[:-4] if vcd_url.endswith("/api") else vcd_url
 urn = vm_id if vm_id.startswith("urn:vcloud:vm:") else f"urn:vcloud:vm:{vm_id}"
 uuid = vm_id.split(":")[-1]
 
-print(f"[STEP 2] Probing Snapshot Endpoints for VM '{vm_name}' (UUID: {uuid})...")
-
-endpoints = [
+print("="*60)
+print(f"[STEP 2] DYNAMICALLY PROBING SNAPSHOTS FOR '{vm_name}'...")
+snapshot_endpoints = [
     ("OpenAPI (singular URN)", f"{base_vcd_url}/cloudapi/1.0.0/vm/{urn}/snapshots"),
     ("OpenAPI (plural URN)",   f"{base_vcd_url}/cloudapi/1.0.0/vms/{urn}/snapshots"),
     ("OpenAPI (singular UUID)",f"{base_vcd_url}/cloudapi/1.0.0/vm/{uuid}/snapshots"),
@@ -151,38 +152,62 @@ endpoints = [
     ("Legacy VM Representation",f"{base_vcd_url}/api/vApp/vm-{uuid}"),
 ]
 
-found_any = False
-for label, url in endpoints:
-    print(f"\n--- Testing: {label} ---")
+found_snaps = []
+for label, url in snapshot_endpoints:
+    print(f"\nEndpoint: {label}")
     print(f"URL: {url}")
     try:
         req = urllib.request.Request(url, headers=headers, method="GET")
         with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-            status = resp.status
             body = resp.read()
             body_preview = body.decode("utf-8", errors="replace").strip()
-            print(f"HTTP Status: {status}")
-            print(f"Response Preview (first 300 chars):")
-            print(body_preview[:300])
-            
+            print(f"HTTP Status: {resp.status}")
+            print(f"Raw Response (first 250 chars): {body_preview[:250]}")
             snaps = parse_snapshots_from_body(body)
             if snaps:
-                print(f"--> [SUCCESS] Parsed {len(snaps)} snapshot(s): {snaps}")
-                found_any = True
+                print(f"--> [MATCH] Dynamically parsed {len(snaps)} snapshot(s): {snaps}")
+                found_snaps = snaps
+                break
             else:
-                print("--> [INFO] Endpoint responded, but 0 snapshots were parsed.")
+                print("--> Responded, but no snapshots contained in payload.")
     except urllib.error.HTTPError as he:
         print(f"HTTP Error {he.code}: {he.reason}")
-        err_body = he.read().decode("utf-8", errors="replace").strip()
-        if err_body:
-            print(f"Error Response (first 200 chars): {err_body[:200]}")
     except Exception as ex:
-        print(f"Connection Failed: {ex}")
+        print(f"Connection error: {ex}")
 
 print("\n" + "="*60)
-print("[STEP 3] Running full get_snapshots.py via Terraform input protocol...")
-import subprocess
+print(f"[STEP 3] DYNAMICALLY PROBING CD/DVD HARDWARE FOR '{vm_name}'...")
+cd_endpoints = [
+    ("Virtual Hardware Media", f"{base_vcd_url}/api/vApp/vm-{uuid}/virtualHardwareSection/media"),
+    ("VM Representation",      f"{base_vcd_url}/api/vApp/vm-{uuid}"),
+]
 
+found_cds = []
+for label, url in cd_endpoints:
+    print(f"\nEndpoint: {label}")
+    print(f"URL: {url}")
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            body = resp.read()
+            body_preview = body.decode("utf-8", errors="replace").strip()
+            print(f"HTTP Status: {resp.status}")
+            print(f"Raw Hardware Response (first 350 chars):")
+            print(body_preview[:350])
+            devices = parse_cd_dvd_from_body(body)
+            if devices:
+                print(f"--> [MATCH] Dynamically parsed {len(devices)} CD/DVD device(s): {devices}")
+                found_cds = devices
+                break
+            else:
+                print("--> No CD/DVD devices found in this section.")
+    except urllib.error.HTTPError as he:
+        print(f"HTTP Error {he.code}: {he.reason}")
+    except Exception as ex:
+        print(f"Connection error: {ex}")
+
+print("\n" + "="*60)
+print("[STEP 4] RUNNING get_snapshots.py (Terraform Protocol Output)...")
 query_payload = json.dumps({
     "vcd_url": vcd_url,
     "vcd_api_token": api_token,
@@ -201,19 +226,23 @@ proc = subprocess.Popen(
     text=True
 )
 stdout, stderr = proc.communicate(input=query_payload)
+print(f"get_snapshots.py output: {stdout.strip()}")
 
-print(f"Process Exit Code: {proc.returncode}")
-if stderr:
-    print("\nSTDERR Output:")
-    print(stderr)
+print("\n" + "="*60)
+print("[STEP 5] RUNNING get_cd_dvd.py (Terraform Protocol Output)...")
+proc2 = subprocess.Popen(
+    ["$PYTHON_CMD", "get_cd_dvd.py"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True
+)
+stdout2, stderr2 = proc2.communicate(input=query_payload)
+print(f"get_cd_dvd.py output: {stdout2.strip()}")
 
-print("\nSTDOUT (Terraform Data Source Output):")
-print(stdout)
-
-print("="*60)
-if found_any:
-    print("[RESULT] Snapshot diagnostic completed successfully! Snapshots detected.")
-else:
-    print("[RESULT] Diagnostic completed. If 0 snapshots were found, review endpoint responses above.")
+print("\n" + "="*60)
+print("DIAGNOSTIC SUMMARY:")
+print(f"  Snapshots found: {found_snaps}")
+print(f"  CD/DVD found   : {found_cds}")
 print("="*60)
 EOF
