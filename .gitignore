@@ -1,0 +1,6 @@
+terraform.auto.tfvars
+output/
+.terraform
+terraform.tfstate
+.terraform.lock.hcl
+terraform.tfstate.backup
