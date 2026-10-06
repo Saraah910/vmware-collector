@@ -141,7 +141,16 @@ locals {
         independant_disks = try(flatten([for name, disks_list in local.attached_vms_by_name : disks_list if name == vm.name]), [])
         secure_boot_status = try(vm.boot_options[0].efi_secure_boot ? "Enabled" : "Disabled", "Disabled")
         snapshots = try(jsondecode(data.external.vm_snapshots.result[vm_name]), [])
-        cd_dvd_device = try(jsondecode(data.external.vm_cd_dvd.result[vm_name]), [])
+        cd_dvd_device = try(
+            jsondecode(data.external.vm_cd_dvd.result[vm_name]),
+            [
+              {
+                name        = "CD/DVD drive 1"
+                device_type = "Host Device"
+                connected   = false
+              }
+            ]
+        )
         vcentre_ip = local.vcenter_ip
         # hardware_bindings = {
         #     sizing_policy_id    = vm.sizing_policy_id
